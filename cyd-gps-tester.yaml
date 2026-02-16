@@ -342,7 +342,7 @@ lvgl:
         # -----------------------------
         - label:
             id: lbl_footer
-            text: "Copyright 2026 PKC PGT4 - v1.03"
+            text: "2026 PKC PGT4 - v1.03"
             text_font: gps_tiny
             text_color: 0x9E00DE
             align: BOTTOM_RIGHT
