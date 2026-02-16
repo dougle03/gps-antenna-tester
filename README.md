@@ -1,7 +1,7 @@
 # gps-tester
 Simple GPS antenna tester.
 
-This device comprises of a CYD (Cheap Yelow Display) based on the ESP32 chipset and a Ublox Neo 6M GPS reciever.
+This device comprises of a CYD (Cheap Yelow Display) based on the ESP32 chipset and a cheap Ublox Neo 6M GPS reciever.
 It's purpose is to enable, with a suitable UFl to SMA pigtail, the testing of GPS antenna's.
 It's also useful as a pretty GPS readout screen complete with GPS time.
 
