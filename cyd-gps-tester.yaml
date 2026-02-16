@@ -1,0 +1,464 @@
+substitutions:
+  device_name: cyd-gps-tester
+  friendly_name: CYD GPS Tester
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(boot_time) = millis();
+          id(first_fix_time) = 0;
+          id(max_sats) = 0;
+          id(fix_drops) = 0;
+          id(had_fix) = false;
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret esphome_ota_pw
+
+wifi:
+  ssid: !secret wifi_10old
+  password: !secret wifi_10old_pw
+  fast_connect: on
+  reboot_timeout: 0s
+  ap:
+    ssid: gps_tester_fallback
+    password: !secret wifi_esp_ap
+
+captive_portal:
+
+web_server:
+  port: 80
+
+# -------------------------------------------------
+# BACKLIGHT
+# -------------------------------------------------
+
+output:
+  - platform: ledc
+    pin: GPIO21
+    id: backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    id: backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+    name: "${device_name}-backlight"
+
+# -------------------------------------------------
+# LDR (Ambient Light Sensor) ON GPIO34
+# -------------------------------------------------
+sensor:
+  - platform: adc
+    pin: GPIO34
+    name: "Ambient Light"
+    id: ldr_sensor
+    unit_of_measurement: "lx"
+    attenuation: 11db
+    update_interval: 1s
+    filters:
+      - lambda: |-
+          // Log raw reading
+          ESP_LOGD("ldr_sensor", "Raw ADC: %.3f", x);
+          
+          // Optional simple conversion to lux (you may need to calibrate)
+          float voltage = x * 3.3;
+          if (voltage <= 0.01) return 0;
+          return (1.0 / voltage) * 100.0;
+
+
+# -------------------------------------------------
+# SPI FOR TFT + TOUCH
+# -------------------------------------------------
+
+spi:
+  - id: tft
+    clk_pin: GPIO14
+    mosi_pin: GPIO13
+    miso_pin: GPIO12
+  - id: touch
+    clk_pin: GPIO25
+    mosi_pin: GPIO32
+    miso_pin: GPIO39
+
+display:
+  - platform: ili9xxx
+    id: my_display
+    model: ILI9341
+    spi_id: tft
+    cs_pin: GPIO15
+    dc_pin: GPIO2
+    auto_clear_enabled: false
+    invert_colors: false
+    color_order: RGB
+    dimensions:
+      width: 240
+      height: 320
+    transform:
+      swap_xy: true
+      mirror_y: true
+      mirror_x: true
+
+touchscreen:
+  platform: xpt2046
+  id: my_touchscreen
+  spi_id: touch
+  cs_pin: GPIO33
+  calibration:
+    x_min: 220
+    x_max: 3756
+    y_min: 394
+    y_max: 3749
+  transform:
+    swap_xy: false
+    mirror_x: true
+    mirror_y: true
+
+# -------------------------------------------------
+# UART GPS (UART2)
+# -------------------------------------------------
+
+uart:
+  id: gps_uart
+  tx_pin: 27
+  rx_pin: 22
+  baud_rate: 9600
+
+gps:
+  latitude:
+    id: gps_lat
+    name: "${device_name}-lat"
+  longitude:
+    id: gps_lon
+    name: "${device_name}-lon"
+  satellites:
+    id: gps_sats
+    name: "${device_name}-sats"
+  hdop:
+    id: gps_hdop
+    name: "${device_name}-hdop"
+
+time:
+  - platform: gps
+    id: gps_time
+
+# -------------------------------------------------
+# GLOBALS
+# -------------------------------------------------
+
+globals:
+  - id: boot_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+  - id: first_fix_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+  - id: max_sats
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: fix_drops
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: had_fix
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+    
+  - id: fix_start_time
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+
+# -------------------------------------------------
+# FONTS
+# -------------------------------------------------
+
+font:
+  - file: "gfonts://Roboto"
+    id: gps_big
+    size: 40
+
+  - file: "gfonts://Roboto"
+    id: gps_med
+    size: 22
+
+  - file: "gfonts://Roboto"
+    id: gps_small
+    size: 18
+
+# -------------------------------------------------
+# LVGL PAGE
+# -------------------------------------------------
+
+lvgl:
+  displays:
+    - my_display
+  touchscreens:
+    - my_touchscreen
+  pages:
+    - id: gps_page
+      bg_color: 0x101418
+      widgets:
+
+        # -----------------------------
+        # DATE / TIME
+        # -----------------------------
+        - label:
+            id: lbl_datetime
+            text: "--:--:--  --/--/----"
+            text_font: gps_small
+            text_color: 0xFFFFFF
+            align: TOP_MID
+            y: 5
+
+        # -----------------------------
+        # FIX STATUS PANEL
+        # -----------------------------
+        - obj:
+            id: fix_panel
+            width: 220
+            height: 60
+            align: TOP_MID
+            y: 35
+            bg_color: 0xB71C1C
+            radius: 8
+            scrollbar_mode: "OFF"
+            scrollable: false
+
+            widgets:
+              - label:
+                  id: lbl_fix
+                  text: "NO FIX"
+                  text_font: gps_big
+                  text_color: 0xFFFFFF
+                  align: CENTER
+
+
+        # -----------------------------
+        # SATS + HDOP
+        # -----------------------------
+        - label:
+            id: lbl_sats
+            text: "Sats: 0"
+            text_font: gps_med
+            text_color: 0xFFFFFF
+            align: TOP_LEFT
+            x: 15
+            y: 105
+
+        - label:
+            id: lbl_hdop
+            text: "HDOP: ---"
+            text_font: gps_med
+            text_color: 0xFFFFFF
+            align: TOP_RIGHT
+            x: -15
+            y: 105
+
+        # Satellite bar
+        - bar:
+            id: sats_bar
+            width: 210
+            height: 14
+            min_value: 0
+            max_value: 12
+            align: TOP_MID
+            y: 140
+
+        # -----------------------------
+        # LAT / LON
+        # -----------------------------
+        - label:
+            id: lbl_lat
+            text: "Lat: ---"
+            text_font: gps_small
+            text_color: 0x3498DB
+            align: TOP_LEFT
+            x: 15
+            y: 170
+
+        - label:
+            id: lbl_lon
+            text: "Lon: ---"
+            text_font: gps_small
+            text_color: 0x3498DB
+            align: TOP_LEFT
+            x: 15
+            y: 200
+
+        # -----------------------------
+        # PERFORMANCE PANEL
+        # -----------------------------
+        - obj:
+            id: stats_panel
+            width: 220
+            height: 80
+            align: BOTTOM_MID
+            y: -10
+            bg_color: 0x202830
+            radius: 8
+            scrollbar_mode: "OFF"
+            scrollable: false
+            pad_all: 6
+
+            widgets:
+              - label:
+                  id: lbl_stats
+                  text: "Fix: --\nSats: --\nHDOP: --"
+                  text_font: gps_small
+                  text_color: 0xFFFFFF
+                  align: CENTER
+
+
+# -------------------------------------------------
+# UPDATE LOOP
+# -------------------------------------------------
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          unsigned long now_ms = millis();
+
+          // -----------------------------
+          // GPS TIME + DATE
+          // -----------------------------
+          auto now = id(gps_time).now();
+          if (now.is_valid()) {
+            std::string dt = str_sprintf(
+              "%02d:%02d:%02d  %02d/%02d/%04d",
+              now.hour,
+              now.minute,
+              now.second,
+              now.day_of_month,
+              now.month,
+              now.year
+            );
+            lv_label_set_text(id(lbl_datetime), dt.c_str());
+          }
+
+          int sats = (int)id(gps_sats).state;
+          float hdop = id(gps_hdop).state;
+          bool has_fix = sats >= 4;
+
+          // -----------------------------
+          // FIX TIMER
+          // -----------------------------
+          if (has_fix && id(first_fix_time) == 0) {
+            id(first_fix_time) = now_ms;
+          }
+
+          if (!has_fix) {
+            id(first_fix_time) = 0;
+          }
+
+          unsigned long fix_elapsed = 0;
+          if (id(first_fix_time) > 0) {
+            fix_elapsed = (now_ms - id(first_fix_time)) / 1000;
+          }
+
+          // Track drops
+          if (id(had_fix) && !has_fix) id(fix_drops) += 1;
+          id(had_fix) = has_fix;
+
+          // -----------------------------
+          // SCORING
+          // -----------------------------
+          float sat_score = ((float)(sats > 12 ? 12 : sats) / 12.0) * 30.0;
+
+          float hdop_score = 0;
+          if (!isnan(hdop)) {
+            if (hdop <= 0.8) hdop_score = 40;
+            else if (hdop <= 1.5) hdop_score = 30;
+            else if (hdop <= 2.5) hdop_score = 20;
+            else if (hdop <= 4.0) hdop_score = 10;
+          }
+
+          float stability_score = 0;
+          if (id(fix_drops) == 0 && has_fix) stability_score = 20;
+          else if (id(fix_drops) == 1) stability_score = 10;
+
+          int total_score = (int)(sat_score + hdop_score + stability_score);
+          if (total_score > 100) total_score = 100;
+
+          // -----------------------------
+          // FIX PANEL COLOUR
+          // -----------------------------
+          if (has_fix) {
+            lv_label_set_text(id(lbl_fix), "3D FIX");
+            lv_obj_set_style_bg_color(id(fix_panel), lv_color_hex(0x1B5E20), 0);
+          } else {
+            lv_label_set_text(id(lbl_fix), "NO FIX");
+            lv_obj_set_style_bg_color(id(fix_panel), lv_color_hex(0xB71C1C), 0);
+          }
+
+          // -----------------------------
+          // SAT + HDOP + LAT/LON
+          // -----------------------------
+          std::string sats_text = str_sprintf("Sats : %d", sats);
+          lv_label_set_text(id(lbl_sats), sats_text.c_str());
+          lv_bar_set_value(id(sats_bar), sats, LV_ANIM_OFF);
+
+          if (!isnan(hdop)) {
+            std::string hdop_text = str_sprintf("HDOP: %.2f", hdop);
+            lv_label_set_text(id(lbl_hdop), hdop_text.c_str());
+          } else {
+            lv_label_set_text(id(lbl_hdop), "HDOP: ---");
+          }
+
+          if (!isnan(id(gps_lat).state)) {
+            std::string lat_text = str_sprintf("Latitude: %.5f", id(gps_lat).state);
+            lv_label_set_text(id(lbl_lat), lat_text.c_str());
+          }
+
+          if (!isnan(id(gps_lon).state)) {
+            std::string lon_text = str_sprintf("Longitude: %.5f", id(gps_lon).state);
+            lv_label_set_text(id(lbl_lon), lon_text.c_str());
+          }
+
+          // -----------------------------
+          // STATS BOX (lbl_stats)
+          // -----------------------------
+          std::string stats_text;
+
+          if (fix_elapsed > 0) {
+            stats_text = str_sprintf(
+              "Quality:%d\nDropouts:%d\nTime since Fix:%lus",
+              total_score,
+              id(fix_drops),
+              fix_elapsed
+            );
+          } else {
+            stats_text = str_sprintf(
+              "Quality:%d\nDropouts:%d\nTime since Fix:--",
+              total_score,
+              id(fix_drops)
+            );
+          }
+
+          lv_label_set_text(id(lbl_stats), stats_text.c_str());
